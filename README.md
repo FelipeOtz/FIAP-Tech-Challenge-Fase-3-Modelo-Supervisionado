@@ -183,7 +183,7 @@ tech-challenge-fase3
 
 ### Seleção de variáveis
 
-Das 45 colunas da base, oito entram no modelo. Cada exclusão tem um motivo documentado.
+Das 45 colunas da base, nove são aproveitadas e uma é derivada, totalizando dez variáveis no modelo. Cada exclusão tem um motivo documentado.
 
 | Critério | Variáveis excluídas |
 | --- | --- |
@@ -199,9 +199,36 @@ Das 45 colunas da base, oito entram no modelo. Cada exclusão tem um motivo docu
 Variáveis mantidas:
 
 - **Numéricas:** `taxa_alfabetizacao_escola_historica`, `alunos_avaliados_escola_historica`, `taxa_alfabetizacao_municipio_historica`, `idhm`, `indice_gini`, `taxa_criancas_dom_sem_fund`, `taxa_atraso_0_fundamental`
-- **Categórica:** `sigla_uf`
+- **Categóricas:** `sigla_uf`, `rede_nome`
+- **Derivada:** `diferenca_escola_municipio`
 
 O critério de redundância é motivado pela interpretabilidade. Variáveis que medem o mesmo fenômeno dividem entre si a importância atribuída pelo SHAP, e nenhuma aparece como relevante no resultado final.
+
+### Engenharia de atributos
+
+A taxa da escola e a do município medem contextos aninhados, e nenhuma das duas informa a posição relativa entre eles. Uma escola com 45% de alfabetização em um município de 40% está acima do próprio contexto; a mesma taxa em um município de 70% está bem abaixo. `diferenca_escola_municipio` expressa essa posição.
+
+A derivação é linha a linha, sem agregação, e portanto não introduz vazamento ao ser calculada antes da divisão entre treino e teste.
+
+O efeito medido é marginal. O ROC-AUC no teste passou de 0,6548 para 0,6546, diferença menor que a variação entre dobras da validação cruzada. No limiar de operação houve ganho pequeno mas consistente: a revocação da classe em risco subiu de 0,6673 para 0,6749, o equivalente a 958 crianças a mais identificadas. O atributo foi mantido, e o resultado registrado como está: a posição relativa da escola acrescenta pouco além do que as duas taxas absolutas já carregam.
+
+`rede_nome` é mantida apesar da diferença modesta entre redes (59% na Municipal contra 63% na Estadual): é a única característica do próprio aluno disponível na base, e sua ausência tornaria o modelo exclusivamente territorial.
+
+### Pipeline de pré-processamento
+
+Imputação pela mediana e padronização para as numéricas, codificação one-hot com `handle_unknown="ignore"` para as categóricas. Todas as etapas são componentes do estimador, não transformações aplicadas à base antes da divisão: a mediana e a média são calculadas apenas sobre a partição de treino de cada dobra.
+
+### Divisão e validação
+
+A divisão treino e teste é agrupada por município com `GroupShuffleSplit`, e a validação cruzada usa `GroupKFold` com três dobras. Alunos do mesmo município compartilham todas as features contextuais, de modo que uma divisão aleatória colocaria registros praticamente idênticos nos dois lados.
+
+São três conjuntos distintos. O treino ajusta o modelo, as dobras do `GroupKFold` dentro dele funcionam como validação na seleção de hiperparâmetros, e o teste fica reservado até a avaliação final.
+
+O conjunto de teste contém 330.836 alunos de 1.104 municípios, nenhum deles presente no treino. Essa é a condição real de uso: estimar risco onde ainda não há medição.
+
+### Otimização de hiperparâmetros
+
+`RandomizedSearchCV` com oito configurações sobre uma amostra de 40% dos municípios de treino, mantendo o agrupamento dentro da validação cruzada. O modelo final é treinado sobre todo o conjunto de treino com a configuração vencedora.
 
 ### Hipóteses analíticas
 
@@ -215,13 +242,56 @@ O critério de redundância é motivado pela interpretabilidade. Variáveis que 
 
 ## Escolha do Algoritmo
 
-_Em desenvolvimento._
+Três candidatos foram comparados sobre o conjunto de teste.
+
+| Modelo | ROC-AUC | Average precision | Acurácia balanceada | Revocação em risco |
+| --- | --- | --- | --- | --- |
+| Trivial (classe majoritária) | 0,5000 | 0,6188 | 0,5000 | 0,0000 |
+| Regressão logística | 0,6523 | 0,7479 | 0,5805 | 0,2764 |
+| Gradient boosting | 0,6545 | 0,7496 | 0,5761 | 0,2611 |
+
+**Gradient boosting e regressão logística empataram.** A diferença de 0,0022 em ROC-AUC é menor que o desvio padrão observado entre dobras da validação cruzada. A relação entre contexto territorial e alfabetização é essencialmente aditiva: não há interações que justifiquem um modelo mais complexo.
+
+O gradient boosting foi adotado por permitir o uso de `TreeExplainer` na etapa de interpretabilidade, não por desempenho superior. A configuração vencedora da busca é a mais regularizada do espaço testado — `max_depth=4`, `learning_rate=0.05`, `max_iter=200`, `min_samples_leaf=50` — o que é coerente com um sinal fraco, em que capacidade adicional serviria apenas para memorizar ruído.
 
 ---
 
 ## Métricas de Avaliação
 
-_Em desenvolvimento._
+### Por que não usar acurácia nem F1 da classe positiva
+
+Com 59,78% de uma classe, prever sempre "alfabetizado" produz F1 de 0,7645 na classe positiva, o maior valor entre todos os modelos testados. A métrica premia quem não discrimina nada. Por isso a avaliação usa ROC-AUC e average precision, que independem do limiar, além de F1 macro, acurácia balanceada e revocação da classe em risco, que dão peso igual às duas classes.
+
+### Escolha do limiar de decisão
+
+O limiar padrão de 0,50 pressupõe custos simétricos. Neste problema eles não são: sinalizar como em risco uma criança que seria alfabetizada custa uma parcela de atenção desperdiçada, enquanto deixar de sinalizar quem precisa custa a ausência de intervenção.
+
+| Limiar | Acurácia balanceada | Revocação em risco |
+| --- | --- | --- |
+| 0,50 | 0,5782 | 0,2689 |
+| 0,55 | 0,6006 | 0,4259 |
+| **0,60** | **0,6051** | **0,6749** |
+| 0,65 | 0,6032 | 0,7594 |
+| 0,70 | 0,5868 | 0,8481 |
+
+O limiar adotado é 0,60, máximo empírico da acurácia balanceada e portanto não arbitrário. Em relação ao padrão, a revocação da classe em risco passa de 27% para 67% sem perda de acurácia balanceada.
+
+### Desempenho final
+
+| Métrica | Valor |
+| --- | --- |
+| ROC-AUC (validação cruzada) | 0,6643 |
+| ROC-AUC (teste) | 0,6546 |
+| Average precision (teste) | 0,7494 |
+| Acurácia balanceada (limiar 0,60) | 0,6051 |
+| Revocação da classe em risco | 0,6749 |
+| Precisão da classe em risco | 0,4722 |
+
+A diferença de 0,0097 entre validação cruzada e teste indica ausência de sobreajuste relevante.
+
+No conjunto de teste, o modelo identifica 85.121 das 126.128 crianças que não atingiram o nível de alfabetização.
+
+**Sobre a magnitude do ganho.** Entre os alunos sinalizados como em risco, 47,2% de fato não se alfabetizaram, contra 38,1% que se obteria sinalizando ao acaso. É um ganho de 1,24 vez sobre o acaso: real, verificável e modesto. É o que os dados permitem sem nenhum atributo individual da criança, e o projeto prefere declarar esse número a apresentar apenas o ROC-AUC.
 
 ---
 
@@ -279,6 +349,8 @@ A avaliação abrange essencialmente as redes Municipal (88,7%) e Estadual (11,3
 Toda a base é do 2º ano do Ensino Fundamental.
 
 Com dois anos de dados, as features defasadas dependem de um único ano-base, e municípios ou escolas que não aparecem em 2023 ficam sem histórico.
+
+As probabilidades previstas são discretas, e não contínuas. Alunos da mesma escola e rede recebem scores idênticos, o que concentra cerca de 54 mil registros do conjunto de teste em torno de 0,55, imediatamente abaixo do limiar adotado. Entre 0,55 e 0,60 a revocação da classe em risco salta de 0,42 para 0,67: a escolha do limiar reclassifica dezenas de milhares de alunos de uma vez, o que exige cautela ao transportar o limiar para outro conjunto de dados.
 
 ---
 
