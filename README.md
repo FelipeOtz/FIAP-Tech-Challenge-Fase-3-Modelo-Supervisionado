@@ -73,9 +73,11 @@ O detalhamento das colunas, com origem e percentual de valores ausentes, está e
 
 ### Universo de modelagem
 
-A base preserva todos os registros de origem. O universo efetivamente modelado é definido dentro do pipeline: alunos presentes que preencheram a prova (`presenca = 1` e `preenchimento_caderno = 1`), totalizando 3.354.661 registros.
+A base preserva todos os registros de origem. O universo efetivamente modelado é definido dentro do pipeline, por dois filtros com motivos distintos.
 
-Alunos ausentes recebem `alfabetizado = 0` por convenção administrativa, já que não fizeram a prova. Mantê-los no universo faria o modelo aprender em parte a prever quem falta à avaliação, um fenômeno com causas próprias.
+**Alunos efetivamente avaliados.** Ausentes e quem compareceu sem preencher o caderno recebem `alfabetizado = 0` por convenção administrativa, já que não fizeram a prova. Mantê-los faria o modelo aprender em parte a prever quem falta à avaliação, um fenômeno com causas próprias. Restam 3.354.661 registros.
+
+**Apenas o ano de 2024.** As features de contexto histórico foram calculadas sobre 2023. Aplicá-las a alunos de 2023 significaria descrever o aluno com um agregado que o contém. Restam **1.851.852 registros**, 47,9% da base.
 
 ---
 
@@ -83,22 +85,23 @@ Alunos ausentes recebem `alfabetizado = 0` por convenção administrativa, já q
 
 A exploração precedeu e orientou as decisões de modelagem. Os achados abaixo foram validados contra o dado real.
 
-| #   | Achado | Implicação para a Modelagem |
-| --- | --- | --- |
-| 1   | `alfabetizado` é função determinística de `proficiencia`: máximo de 742,999819 entre não alfabetizados, mínimo de 743,00 entre alfabetizados, sem sobreposição | `proficiencia` descartada das features, por ser vazamento perfeito |
-| 2   | Todos os 512.153 alunos ausentes recebem rótulo 0, sem exceção | `presenca` define o universo e não entra como feature |
-| 3   | Os 1.185 alunos presentes sem nota são exatamente os `preenchimento_caderno = 0` | Filtro do universo expresso como regra de negócio, não como ausência de nulo |
-| 4   | `serie` é constante em toda a base (2º ano do EF) | Removida por variância zero |
-| 5   | `caderno` tem 21 versões em distribuição quase uniforme, resultado da atribuição aleatória do desenho amostral, mais um código residual com 18 registros | Removida das features e usada como controle negativo na interpretabilidade |
-| 6   | `rede` é praticamente binária: Municipal 88,7%, Estadual 11,3%, Privada 25 registros, Federal ausente | Privada tratada como resíduo e limitação de cobertura documentada |
-| 7   | A base cobre dois anos (2023 e 2024), com cerca de 99% dos municípios de 2023 reaparecendo em 2024 | Viabiliza features defasadas e validação temporal |
-| 8   | A taxa de alfabetização por escola em 2023 varia de 0% a 100%, com mediana de 58,8% e quartis em 42,3% e 74,2% | Hipótese a testar: o histórico da escola concentra boa parte do sinal disponível |
-| 9   | Balanceamento do alvo no universo modelado: 59,2% alfabetizados, 40,8% não | Dispensa técnicas de reamostragem |
-| 10  | Agregados municipais do ano corrente incluem o próprio aluno no cálculo | Só entram agregados do ano anterior, calculados sobre coorte distinta |
-| 11  | A ausência dos 18 indicadores do Atlas ocorre em bloco, nos mesmos registros (0,04% da base) | Uma estratégia de imputação resolve o conjunto |
-| 12  | Metas municipais cobrem apenas a rede Municipal, e metas estaduais cobrem a rede Pública | A meta estadual preenche a lacuna dos alunos da rede Estadual |
-| 13  | `meta_alfabetizacao_brasil` é constante dentro de cada ano | Mantida na base por completude, sem poder discriminante |
-| 14  | A base não traz nenhum atributo individual da criança além da rede de ensino | Define a natureza territorial do modelo e sua principal limitação |
+| # | Achado | Implicação para a Modelagem |
+|---|---|---|
+| 1 | `alfabetizado` é função determinística de `proficiencia` no corte de 743 pontos: um classificador que aplica apenas o limiar atinge acurácia 1,000000 | Remover `proficiencia` das features |
+| 2 | Todos os 512.153 alunos ausentes recebem rótulo 0, sem exceção. O rótulo mede ausência, não aprendizagem | `presenca` e `preenchimento_caderno` definem o universo, não entram como features |
+| 3 | A taxa histórica da escola correlaciona 0,4321 com o alvo em 2023 e 0,1003 em 2024. A diferença é o vazamento de incluir o próprio aluno no agregado | Universo restrito a 2024, com 2023 como histórico. Redução de 3,35M para 1,85M registros |
+| 4 | `serie` é constante e `caderno` é aleatório por desenho amostral | Ambas removidas; `caderno` fica como controle negativo na interpretabilidade |
+| 5 | O contexto municipal correlaciona mais com o alvo (0,25) que o contexto escolar (0,10), apesar de ser o grão mais distante do aluno | A mediana de 35 alunos avaliados por escola torna a taxa escolar ruidosa. `alunos_avaliados_escola_historica` entra como indicador de confiabilidade |
+| 6 | `taxa_alfabetizacao_municipio_historica` e `media_portugues_municipio_historica` correlacionam 0,94 entre si; as três dimensões do IDHM correlacionam entre 0,95 e 0,97 com o índice composto | Manter um representante por bloco, para que o SHAP não divida importância entre variáveis redundantes |
+| 7 | O IDHM separa apenas o quintil inferior (56,8% contra 60% a 61% nos demais) | Relação em degrau, não linear. Modelos de árvore capturam o corte; modelos lineares perdem o efeito |
+| 8 | A taxa da escola em 2023 tem 21,03% de ausência em 2024, contra 1,92% do contexto municipal | Imputação obrigatória. A ausência é estrutural: escolas sem participação no ano anterior |
+| 9 | Balanceamento de 59,78% contra 40,22% | Dispensa reamostragem ou ponderação de classe |
+| 10 | 45,6% dos municípios ficaram abaixo da meta pactuada para 2024 | Alvo alternativo viável no grão município, e recorte natural para a aplicação estratégica |
+| 11 | O risco se concentra no Nordeste (28% dos municípios abaixo de 40% de alfabetização) e no Norte (22%), contra 1% no Sudeste | Região e UF entram como features categóricas |
+| 12 | Municípios com perfil socioeconômico praticamente idêntico (IDHM 0,58 e 0,59, pobreza infantil 57% e 56%) apresentam 47% e 75% de alfabetização | As variáveis do Atlas não explicam a diferença. O fator determinante está fora do que a base mede |
+| 13 | A maior correlação individual com o alvo é 0,25 | Expectativa de desempenho moderado. Modelos lineares e de árvore tendem a empatar |
+| 14 | Nenhum atributo individual da criança existe na base além da rede de ensino | Alunos da mesma escola recebem predição idêntica. O resultado é score de risco territorial |
+
 
 ---
 
@@ -178,7 +181,35 @@ tech-challenge-fase3
 
 ## Etapas de Modelagem
 
-_Em desenvolvimento._
+### Seleção de variáveis
+
+Das 45 colunas da base, oito entram no modelo. Cada exclusão tem um motivo documentado.
+
+| Critério | Variáveis excluídas |
+| --- | --- |
+| Vazamento direto | `proficiencia` |
+| Definem o universo, constantes após o filtro | `presenca`, `preenchimento_caderno` |
+| Variância zero | `serie` |
+| Aleatória por desenho amostral | `caderno` |
+| Peso amostral, não atributo explicativo | `peso_aluno` |
+| Identificadores | `id_aluno`, `id_escola`, `id_municipio`, `nome_municipio` |
+| Redundância com variável mantida | `media_portugues_municipio_historica` (0,94), dimensões e componentes do IDHM (0,95 a 0,97), `prop_pobreza_criancas` e `taxa_analfabetismo_18_mais` (0,84 a 0,91), `meta_alfabetizacao_municipio` (0,98), `regiao` (determinada por `sigla_uf`) |
+| Correlação nula com o alvo | `populacao`, `populacao_urbana`, `populacao_rural`, demais indicadores do Atlas |
+
+Variáveis mantidas:
+
+- **Numéricas:** `taxa_alfabetizacao_escola_historica`, `alunos_avaliados_escola_historica`, `taxa_alfabetizacao_municipio_historica`, `idhm`, `indice_gini`, `taxa_criancas_dom_sem_fund`, `taxa_atraso_0_fundamental`
+- **Categórica:** `sigla_uf`
+
+O critério de redundância é motivado pela interpretabilidade. Variáveis que medem o mesmo fenômeno dividem entre si a importância atribuída pelo SHAP, e nenhuma aparece como relevante no resultado final.
+
+### Hipóteses analíticas
+
+**H1 — O histórico educacional supera o contexto socioeconômico.** As variáveis de desempenho passado apresentam correlação uma ordem de grandeza acima das socioeconômicas do Atlas. Espera-se que o SHAP confirme essa hierarquia.
+
+**H2 — A defasagem do Atlas limita seu poder preditivo.** As variáveis socioeconômicas são do Censo de 2010 e apresentam correlação próxima de zero com o desfecho de 2024. O teste indireto é a comparação com `taxa_atraso_0_fundamental`, também de 2010, que mantém correlação de 0,09.
+
+**H3 — A confiabilidade da taxa escolar modera seu efeito.** A mediana de 35 alunos avaliados por escola torna a taxa escolar ruidosa. Espera-se maior peso de `taxa_alfabetizacao_escola_historica` quando `alunos_avaliados_escola_historica` é alto.
 
 ---
 
@@ -202,7 +233,38 @@ _Em desenvolvimento._
 
 ## Insights Encontrados
 
-_Em desenvolvimento._
+### Vulnerabilidade socioeconômica não determina o resultado
+
+O agrupamento de municípios por perfil produziu dois grupos com condições socioeconômicas praticamente idênticas e desempenho educacional oposto.
+
+| | Grupo A | Grupo B |
+| --- | --- | --- |
+| IDHM | 0,58 | 0,59 |
+| Renda per capita | R$ 270 | R$ 277 |
+| Pobreza infantil | 57,5% | 56,1% |
+| Crianças em domicílio sem fundamental completo | 51,3% | 49,1% |
+| **Taxa de alfabetização em 2024** | **47%** | **75%** |
+| Participação do Nordeste | 74,0% | 70,8% |
+
+Vinte e oito pontos percentuais de diferença entre municípios com a mesma pobreza, a mesma renda e a mesma escolaridade familiar. As variáveis do Atlas não explicam a divergência: o fator determinante está fora do que a base socioeconômica mede, no campo da gestão educacional.
+
+A leitura precisa de uma ressalva: o agrupamento inclui o histórico de alfabetização entre suas variáveis, de modo que parte da separação é esperada. O achado não é que existem dois grupos distintos, e sim que **as variáveis socioeconômicas isoladamente não os separam**.
+
+### O risco é geograficamente concentrado
+
+Entre os municípios com ao menos cem alunos avaliados, 28% dos nordestinos e 22% dos nortistas ficaram abaixo de 40% de alfabetização, contra 1% dos municípios do Sudeste. Os quinze piores resultados nacionais estão todos na Bahia, em Sergipe, no Amazonas e no Amapá.
+
+### Quase metade dos municípios não alcançou a meta
+
+Dos 5.232 municípios com meta pactuada disponível, 45,6% ficaram abaixo do valor acordado para 2024.
+
+### A meta pactuada reproduz o desempenho passado
+
+A meta municipal correlaciona 0,98 com a taxa de alfabetização do ano anterior. Municípios com histórico ruim recebem metas baixas e municípios com histórico bom recebem metas altas. Para o modelo isso é redundância; para a gestão pública, indica que as metas são calibradas pelo ponto de partida, não por ambição uniforme.
+
+### O contexto municipal prediz melhor que o escolar
+
+Contra a intuição, a taxa do município correlaciona mais com o resultado do aluno (0,25) do que a taxa da própria escola (0,10). A explicação está na escala: com mediana de 35 alunos avaliados por escola, a taxa escolar é dominada por ruído amostral, enquanto o agregado municipal mede o mesmo fenômeno com muito menos variância.
 
 ---
 
