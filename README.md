@@ -69,7 +69,7 @@ A construção da base ocorre em etapa anterior a este projeto, executada localm
 
 `data/base_gold_alunos.parquet` tem 3.867.999 registros e 45 colunas, cobrindo 2023 e 2024, alunos do 2º ano do Ensino Fundamental.
 
-O detalhamento das colunas, com origem e percentual de valores ausentes, está em [`reports/dicionario_de_dados.md`](reports/dicionario_de_dados.md).
+O detalhamento das colunas, com origem e percentual de valores ausentes, está em [`reports/documentacao_tecnica.md`](reports/documentacao_tecnica.md).
 
 ### Universo de modelagem
 
@@ -158,17 +158,18 @@ tech-challenge-fase3
 │
 ├── 📁 src
 │   ├── preprocessing
-│   │   ├── universo.py                   Definição do universo de modelagem
+│   │   ├── universo.py                   Universo de modelagem, features e atributo derivado
 │   │   └── pipeline.py                   ColumnTransformer: imputação e encoding
 │   ├── modeling
-│   │   └── treino.py                     Split por município, treino e validação cruzada
-│   ├── evaluation
-│   │   └── metricas.py                   ROC-AUC, F1, matriz de confusão
-│   └── visualization
-│       └── graficos.py                   Gráficos reaproveitados entre notebooks
+│   │   └── treino.py                     Divisão agrupada e montagem do estimador
+│   └── evaluation
+│       └── metricas.py                   Métricas de avaliação e tabela comparativa
+│
+├── 📁 models
+│   └── pipeline_alfabetizacao.joblib     Pipeline treinada, consumida pela interpretabilidade
 │
 ├── 📁 reports
-│   └── dicionario_de_dados.md            Descrição das 45 colunas e origem de cada fonte
+│   └── documentacao_tecnica.md           Dicionário de dados, regras de modelagem e reprodução
 │
 ├── 📁 images                             Gráficos exportados
 │
@@ -176,6 +177,8 @@ tech-challenge-fase3
 ├── README.md
 └── .gitignore
 ```
+
+Não há módulo de visualização: cada gráfico é gerado uma única vez no notebook que o contextualiza, e extrair função de uso único acrescentaria indireção sem reduzir duplicação.
 
 ---
 
@@ -242,17 +245,17 @@ O conjunto de teste contém 330.836 alunos de 1.104 municípios, nenhum deles pr
 
 ## Escolha do Algoritmo
 
-Três candidatos foram comparados sobre o conjunto de teste.
+Três candidatos foram comparados sobre o conjunto de teste. As métricas dependentes de limiar usam 0,60, o limiar de operação adotado.
 
 | Modelo | ROC-AUC | Average precision | Acurácia balanceada | Revocação em risco |
 | --- | --- | --- | --- | --- |
 | Trivial (classe majoritária) | 0,5000 | 0,6188 | 0,5000 | 0,0000 |
-| Regressão logística | 0,6523 | 0,7479 | 0,5805 | 0,2764 |
-| Gradient boosting | 0,6545 | 0,7496 | 0,5761 | 0,2611 |
+| Regressão logística | 0,6523 | 0,7479 | 0,6044 | 0,6586 |
+| Gradient boosting | 0,6545 | 0,7496 | 0,6043 | 0,6737 |
 
 **Gradient boosting e regressão logística empataram.** A diferença de 0,0022 em ROC-AUC é menor que o desvio padrão observado entre dobras da validação cruzada. A relação entre contexto territorial e alfabetização é essencialmente aditiva: não há interações que justifiquem um modelo mais complexo.
 
-O gradient boosting foi adotado por permitir o uso de `TreeExplainer` na etapa de interpretabilidade, não por desempenho superior. A configuração vencedora da busca é a mais regularizada do espaço testado — `max_depth=4`, `learning_rate=0.05`, `max_iter=200`, `min_samples_leaf=50` — o que é coerente com um sinal fraco, em que capacidade adicional serviria apenas para memorizar ruído.
+A acurácia balanceada é praticamente idêntica (0,6043 contra 0,6044), e a única vantagem consistente do boosting está na revocação da classe em risco (0,6737 contra 0,6586). O gradient boosting foi adotado por essa diferença e por permitir o uso de `TreeExplainer` na etapa de interpretabilidade, não por desempenho global superior. A configuração vencedora da busca é a mais regularizada do espaço testado — `max_depth=4`, `learning_rate=0.05`, `max_iter=200`, `min_samples_leaf=50` — o que é coerente com um sinal fraco, em que capacidade adicional serviria apenas para memorizar ruído.
 
 ---
 
