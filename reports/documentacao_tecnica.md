@@ -1,4 +1,10 @@
-# Dicionário de Dados — `base_gold_alunos.parquet`
+# Documentação Técnica
+
+Referência técnica do projeto: esquema da base analítica, regras de modelagem e procedimento de reprodução. O contexto do problema, as decisões analíticas e a interpretação dos resultados estão no [README](../README.md).
+
+---
+
+# Dicionário de Dados
 
 Base analítica no grão aluno, construída a partir da camada Gold do Tech Challenge Fase 2,
 enriquecida com o Atlas do Desenvolvimento Humano (IDHM) e a Divisão Territorial Brasileira (IBGE).
@@ -125,3 +131,117 @@ enriquecida com o Atlas do Desenvolvimento Humano (IDHM) e a Divisão Territoria
   omitidas: por serem agregados que incluem o próprio aluno, constituiriam vazamento.
 - A avaliação cobre essencialmente as redes Municipal (88,7%) e Estadual (11,3%). A rede Privada
   aparece em 25 registros e a Federal não aparece.
+
+---
+
+# Regras de Modelagem
+
+Restrições que definem o comportamento da pipeline. Alterá-las invalida os resultados publicados.
+
+## Universo
+
+O universo modelado é definido dentro da pipeline, não na base:
+
+```python
+universo = base[
+    (base["presenca"] == 1)
+    & (base["preenchimento_caderno"] == 1)
+    & (base["ano"] == 2024)
+]
+```
+
+Resulta em 1.851.852 registros de 5.517 municípios.
+
+## Variáveis excluídas
+
+| Variável | Motivo |
+| --- | --- |
+| `proficiencia` | Determina o alvo pelo corte de 743 pontos. Um classificador que aplica apenas o limiar atinge acurácia 1,000000 |
+| `presenca`, `preenchimento_caderno` | Definem o universo; constantes após o filtro |
+| `serie` | Constante em toda a base (2º ano do Ensino Fundamental) |
+| `caderno` | Versão do caderno de prova, atribuída aleatoriamente por desenho amostral |
+| `peso_aluno` | Peso amostral do desenho de avaliação, não atributo explicativo |
+| `id_aluno`, `id_escola`, `nome_municipio` | Identificadores |
+| `id_municipio` | Identificador. Usado como agrupador na divisão e na validação, nunca como feature |
+| `media_portugues_municipio_historica` | Correlação de 0,94 com `taxa_alfabetizacao_municipio_historica` |
+| `idhm_e`, `idhm_r`, `renda_pc` | Correlação de 0,95 a 0,97 com `idhm` |
+| `prop_pobreza_criancas`, `taxa_analfabetismo_18_mais` | Correlação de 0,84 a 0,91 com `taxa_criancas_dom_sem_fund` |
+| `meta_alfabetizacao_municipio` | Correlação de 0,98 com `taxa_alfabetizacao_municipio_historica` |
+| `regiao` | Determinada por `sigla_uf` |
+| `populacao`, `populacao_urbana`, `populacao_rural` | Correlação nula com o alvo |
+
+## Variáveis utilizadas
+
+Numéricas: `taxa_alfabetizacao_escola_historica`, `alunos_avaliados_escola_historica`, `taxa_alfabetizacao_municipio_historica`, `idhm`, `indice_gini`, `taxa_criancas_dom_sem_fund`, `taxa_atraso_0_fundamental`, `diferenca_escola_municipio`.
+
+Categóricas: `sigla_uf`, `rede_nome`.
+
+`diferenca_escola_municipio` é derivada dentro da pipeline, linha a linha:
+
+```python
+universo["diferenca_escola_municipio"] = (
+    universo["taxa_alfabetizacao_escola_historica"]
+    - universo["taxa_alfabetizacao_municipio_historica"]
+)
+```
+
+## Vazamento temporal
+
+Todo agregado histórico refere-se a 2023. A correlação da taxa histórica da escola com o alvo é 0,4321 nas linhas de 2023 e 0,1003 nas de 2024: a diferença mede o viés de incluir o próprio aluno no agregado que o descreve.
+
+Nenhum agregado do ano corrente entra como feature.
+
+## Divisão e validação
+
+`GroupShuffleSplit` agrupado por `id_municipio` separa 20% para teste. A validação cruzada usa `GroupKFold` com três dobras dentro do treino.
+
+O agrupamento é obrigatório: alunos do mesmo município compartilham todas as features contextuais, e uma divisão aleatória colocaria registros idênticos nos dois lados.
+
+## Pré-processamento
+
+Integrado ao estimador via `Pipeline` e `ColumnTransformer`:
+
+- Numéricas: `SimpleImputer(strategy="median")` seguido de `StandardScaler`
+- Categóricas: `OneHotEncoder(handle_unknown="ignore", sparse_output=False, dtype=np.float32)`
+
+O `float32` no encoder reduz pela metade a memória da matriz codificada. Com `float64` e `n_jobs=-1`, a busca de hiperparâmetros esgota a memória disponível.
+
+## Modelo e limiar
+
+`HistGradientBoostingClassifier` com `max_depth=4`, `learning_rate=0.05`, `max_iter=200`, `min_samples_leaf=50`.
+
+O limiar de decisão é 0,60, e não o padrão de 0,50. É o máximo empírico da acurácia balanceada e reflete a assimetria de custo entre os dois erros.
+
+## Replicabilidade
+
+`random_state=42` em `GroupShuffleSplit`, no estimador e em `RandomizedSearchCV`.
+
+---
+
+# Reprodução
+
+## Ambiente
+
+```bash
+python -m venv .venv
+source .venv/Scripts/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+## Ordem de execução
+
+| Notebook | Produz | Depende de |
+| --- | --- | --- |
+| `01_eda.ipynb` | Gráficos em `images/` | `data/base_gold_alunos.parquet` |
+| `02_modelagem.ipynb` | `models/pipeline_alfabetizacao.joblib` | a base |
+| `03_interpretabilidade.ipynb` | Gráficos de SHAP e permutação | a pipeline serializada |
+
+O notebook de interpretabilidade reconstrói a divisão treino e teste com a mesma semente, o que reproduz exatamente a partição usada na modelagem.
+
+## Custo de execução
+
+A busca de hiperparâmetros treina 24 modelos sobre uma amostra de 40% dos municípios de treino. A importância por permutação faz cinco repetições sobre 100 mil registros, e o cálculo de SHAP roda sobre 20 mil.
+
+## Origem da base
+
+`data/base_gold_alunos.parquet` é produzido fora deste repositório, a partir da camada Gold do Tech Challenge Fase 2, do Atlas do Desenvolvimento Humano e da Divisão Territorial Brasileira. A Fase 3 parte do arquivo consolidado.

@@ -1,7 +1,7 @@
-pandas
-pyarrow
-scikit-learn
-shap
-matplotlib
-seaborn
-jupyter
+jupyter==1.1.1
+matplotlib==3.11.2
+pandas==3.0.5
+pyarrow==25.0.1
+scikit-learn==1.9.1
+seaborn==0.13.2
+shap==0.52.0
