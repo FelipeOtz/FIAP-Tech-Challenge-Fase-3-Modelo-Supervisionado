@@ -297,7 +297,60 @@ No conjunto de teste, o modelo identifica 85.121 das 126.128 crianças que não 
 
 ## Interpretação dos Resultados
 
-_Em desenvolvimento._
+A interpretabilidade combina duas medidas. A importância por permutação embaralha cada variável e mede a queda de ROC-AUC no conjunto de teste. Os valores SHAP atribuem a cada predição a contribuição de cada variável, revelando direção e intensidade do efeito.
+
+### Controle negativo
+
+Antes de ler o ranking, a leitura foi validada. Um modelo de controle foi treinado com os valores de `indice_gini` substituídos por ruído aleatório. O ruído ficou na sétima posição entre dez variáveis, com queda de -0,00000.
+
+Isso estabelece a régua: qualquer variável com importância abaixo de aproximadamente 0,001 é estatisticamente indistinguível de aleatório.
+
+### O modelo usa duas variáveis
+
+| Variável | Queda de ROC-AUC |
+| --- | --- |
+| `taxa_alfabetizacao_municipio_historica` | 0,0995 |
+| `sigla_uf` | 0,0437 |
+| `indice_gini` | 0,0011 |
+| `taxa_atraso_0_fundamental` | 0,0009 |
+| `rede_nome` | 0,0003 |
+| `taxa_criancas_dom_sem_fund` | 0,0002 |
+| `taxa_alfabetizacao_escola_historica` | 0,00009 |
+| `alunos_avaliados_escola_historica` | 0,00009 |
+| `diferenca_escola_municipio` | 0,00003 |
+| `idhm` | -0,0003 |
+
+O histórico de alfabetização do município e a unidade federativa respondem por praticamente todo o desempenho. As outras oito variáveis estão no patamar do ruído, incluindo o IDHM, a taxa histórica da escola e o atributo derivado.
+
+No SHAP a unidade federativa aparece fragmentada em 27 colunas codificadas. Somadas, alcançam cerca de 0,30, contra 0,35 do histórico municipal: as duas variáveis dominantes têm peso comparável.
+
+### Por que SHAP e permutação discordam
+
+As duas medidas divergem em `taxa_atraso_0_fundamental`: importância SHAP de 0,056 contra queda de 0,0009 na permutação. A divergência é esperada.
+
+O SHAP mede quanto a variável desloca a saída do modelo; a permutação mede quanto o desempenho cai sem ela. Uma variável redundante desloca a saída, mas não faz falta quando removida, porque as correlacionadas compensam. `taxa_atraso_0_fundamental` correlaciona 0,70 com o IDHM e 0,32 com a taxa histórica municipal. O modelo usa a variável, mas não depende dela.
+
+### Teste das hipóteses
+
+**H1, confirmada.** Importância SHAP somada de 0,363 para as variáveis educacionais contra 0,052 para as socioeconômicas, razão de sete para um.
+
+**H2, refutada.** O indicador educacional de 2010 (0,056) supera todas as socioeconômicas de 2010 somadas (0,052). Como compartilham a mesma vintage, a defasagem de catorze anos não é o fator limitante: a natureza da variável é. Indicadores educacionais predizem educação melhor que indicadores de renda, mesmo desatualizados.
+
+**H3, refutada e na direção oposta.** O SHAP da taxa escolar é 0,0033 em escolas pequenas e 0,0026 nas grandes. Ambos irrelevantes, já que a taxa da escola não contribui para o modelo.
+
+### Efeitos estaduais
+
+Os valores SHAP mostram efeitos de unidade federativa que persistem depois de o modelo já considerar o histórico do município e os indicadores socioeconômicos.
+
+Ceará e Minas Gerais empurram a predição para alfabetizado, com contribuições entre 0,3 e 0,8. O Rio Grande do Sul apresenta o efeito negativo mais forte do conjunto, próximo de -0,8, apesar de figurar entre as unidades federativas de maior IDHM.
+
+O resultado do Rio Grande do Sul é registrado como achado a investigar, não como conclusão: pode refletir desempenho real na avaliação, diferenças de participação ou composição da amostra de municípios sorteados para o teste.
+
+### Desempenho no grão que interessa à decisão
+
+No grão aluno o ROC-AUC é 0,6546. Agregando as predições por município, a correlação entre taxa prevista e taxa observada é **0,8449**.
+
+A diferença não é contradição. O ruído individual, que nenhuma variável contextual poderia explicar, se cancela na média. O município é a unidade em que a gestão pública decide, e é nela que o modelo é preciso.
 
 ---
 
@@ -356,13 +409,45 @@ As probabilidades previstas são discretas, e não contínuas. Alunos da mesma e
 
 ## Aplicação Prática para Políticas Públicas
 
-_Em desenvolvimento._
+### O que o modelo entrega
+
+Uma estimativa de risco por município, aplicável antes da avaliação do ano corrente. Com correlação de 0,8449 entre previsto e observado no grão municipal, o modelo permite ordenar territórios por risco e alocar recursos antes que o resultado se confirme.
+
+No conjunto de teste, os quinze municípios de maior risco previsto estão todos na Bahia, com probabilidade média de alfabetização entre 28,5% e 31,0%.
+
+### Três leituras acionáveis
+
+**Vulnerabilidade socioeconômica não determina o resultado.** O IDHM é ruído dentro do modelo, e o agrupamento de municípios identificou dois grupos com renda, pobreza infantil e escolaridade familiar equivalentes e 28 pontos percentuais de diferença na alfabetização. Municípios pobres alcançam resultados muito distintos entre si, o que desloca o foco da política de compensação da pobreza para a atuação sobre a gestão educacional.
+
+**O efeito estadual é comparável ao histórico do município.** Depois de considerar o desempenho passado e as condições socioeconômicas, permanece um efeito de unidade federativa de magnitude equivalente. Isso sugere que políticas de alfabetização em âmbito estadual produzem diferença mensurável, e indica onde procurar práticas que funcionaram.
+
+**As metas pactuadas reproduzem o ponto de partida.** A meta municipal correlaciona 0,98 com a taxa do ano anterior, e 45,6% dos municípios ficaram abaixo dela em 2024. Metas calibradas pelo desempenho passado tendem a pedir menos esforço de quem já ia bem.
+
+### Como usaria o resultado
+
+O modelo serve à priorização, não ao diagnóstico individual. Alunos da mesma escola e rede recebem a mesma predição, de modo que o produto útil é uma lista ordenada de territórios, não de crianças.
+
+O limiar de 0,60 foi escolhido por essa razão. Identifica 67% das crianças que não atingirão o nível de alfabetização, ao custo de sinalizar também parte das que atingiriam. Entre os sinalizados, 47,2% de fato não se alfabetizam, contra 38,1% de uma seleção aleatória.
+
+### O que o modelo não resolve
+
+O ganho sobre o acaso é de 1,24 vez. O modelo ordena territórios por risco com utilidade real, mas não substitui diagnóstico local nem identifica quais crianças precisam de apoio dentro de uma mesma escola. Para isso seriam necessários dados individuais que a base pública não contém.
 
 ---
 
 ## Possíveis Evoluções Futuras
 
-_Em desenvolvimento._
+**Dados individuais da criança.** A limitação central do projeto. Idade, trajetória escolar, frequência e condição socioeconômica familiar permitiriam distinguir crianças dentro de uma mesma escola, transformando o score territorial em risco individual.
+
+**Censo Escolar.** A base traz `id_escola`, que permite juntar infraestrutura, formação docente, porte e jornada. É a fonte mais promissora entre as não utilizadas, e a que poderia explicar por que municípios socioeconomicamente idênticos divergem tanto.
+
+**Indicadores socioeconômicos atualizados.** O Censo de 2022 substituiria a base de 2010 do Atlas. O teste da H2 sugere que o ganho seria limitado, mas a hipótese merece verificação direta.
+
+**Série histórica mais longa.** Com apenas 2023 e 2024, as features defasadas dependem de um único ano-base. Ciclos adicionais permitiriam medir tendência, e não apenas nível.
+
+**Investigação do efeito estadual.** O contraste entre Ceará e Rio Grande do Sul, persistente após controlar por histórico e condição socioeconômica, sugere que há informação sobre gestão educacional que a base não captura diretamente.
+
+**Modelagem no grão município.** Dado que o desempenho útil aparece na agregação, um modelo treinado diretamente sobre municípios, com o alvo definido como atingir ou não a meta pactuada, pode ser mais adequado ao uso pretendido que a agregação de predições individuais.
 
 ---
 
