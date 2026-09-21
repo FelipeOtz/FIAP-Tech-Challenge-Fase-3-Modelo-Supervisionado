@@ -169,7 +169,9 @@ tech-challenge-fase3
 │   └── pipeline_alfabetizacao.joblib     Pipeline treinada, consumida pela interpretabilidade
 │
 ├── 📁 reports
-│   └── documentacao_tecnica.md           Dicionário de dados, regras de modelagem e reprodução
+│   ├── documentacao_tecnica.md                                     Dicionário de dados, regras de modelagem e reprodução
+│   ├── Predicao_e_Inteligencia_Analitica_para_Alfabetizacao.pptx    Apresentação usada no vídeo executivo
+│   └── link_video_executivo.txt                                    Endereço do vídeo executivo
 │
 ├── 📁 images                             Gráficos exportados
 │
