@@ -472,3 +472,14 @@ Execute os notebooks na ordem numérica. A análise exploratória orienta as dec
 ## Replicabilidade
 
 Todos os processos com componente aleatório usam `random_state` fixo: divisão dos conjuntos, inicialização dos modelos e busca de hiperparâmetros. Executar os notebooks na mesma ordem, com as versões declaradas em `requirements.txt`, reproduz os resultados apresentados.
+
+
+---
+
+## Nota sobre o prazo
+
+Este projeto foi entregue após a data prevista, e peço desculpas pelo atraso.
+
+Assim como na Fase 2, o desenvolvimento foi feito individualmente. A Fase 3 exigiu construir uma base analítica no grão aluno que não existia na camada Gold anterior, e ao longo da análise surgiram correções que optei por fazer em vez de contornar, como o vazamento temporal identificado na exploração dos dados.
+
+Preferi entregar depois a entregar um resultado que eu soubesse estar comprometido. Fico à disposição para esclarecer qualquer ponto do trabalho.
